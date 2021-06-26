@@ -91,26 +91,10 @@ attestationDataRootsBucket with changed schema.
       
 
 -----
-The issue with this fix is in old code, we store an attestation only once.
-I this fix, we will have to store, one attestattion multiple times (no of validators for that attestation) 
+The issue with this fix is, in old code we store an attestation only once.
+but now we will have to store, one attestattion multiple times (no of validators for that attestation) 
 
-100 attestations per block, 100 validators per attestation
-k1 = SigningRoot(32) + ValidatorIndex(5)) = 13 bytes
-v1 = size_of(att)= 950 bytes
-keys total bytes = 4096 * 32 * (100 * 13) = 162 Mb
-values total bytes = 4096 * 32 * (100 * 950) = 11 Gb
-
-K2 = targetEpoc(32) + ValidatorIndexes(5 * 100 validators) = 532 bytes
-k1 = 13 bytes
-keys total bytes = 4096 * 32 * (100 * 532) = 6Gb
-values total bytes = 4096 * 32 * (100 * 13) = 162 Mb
+https://github.com/prysmaticlabs/prysm/pull/9085 reverts this fix to save space.
 
 
-@rauljordan#2913 Yes, you were right about #9085.
-There are two thing about this.
-1) Previously, we were storing an attestation only once and having many indirections.
-    To bring down CPU usage, #8927 de-normalized the schema and stored every attestation multiple times (once for every validator who attested).
-    Now i see that we are using more space :-)
-    To bring down storage space **and** bring down the CPU usage, we can stagger DB access inside ```CheckAttesterDoubleVotes``` and make it give back the result 
-     asynchronously.
-2) I found out during a review today that the ```HighestAttestations``` in the old code may be not right.
+
