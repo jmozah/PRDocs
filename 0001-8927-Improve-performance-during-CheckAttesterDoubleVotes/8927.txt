@@ -1,3 +1,6 @@
+Issue Link: https://github.com/prysmaticlabs/prysm/issues/8913
+PR Link   : https://github.com/prysmaticlabs/prysm/pull/8927
+
 
 Logic before the fix:
 

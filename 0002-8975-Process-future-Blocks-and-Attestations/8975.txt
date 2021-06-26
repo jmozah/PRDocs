@@ -1,0 +1,2 @@
+Issue Link : https://github.com/prysmaticlabs/prysm/issues/8606
+PR Link    : https://github.com/prysmaticlabs/prysm/pull/8975

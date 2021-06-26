@@ -1,0 +1,4 @@
+Issue Link : None (done to analyze state DB for https://github.com/prysmaticlabs/prysm/issues/8954)
+PR Link    : https://github.com/prysmaticlabs/prysm/pull/9063
+
+
