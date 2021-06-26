@@ -1,0 +1,116 @@
+
+Logic before the fix:
+
+1) DB schema was like this
+   - attestationRecordsBucket
+       Key   (k1): att.SigningRoot + []ValidatorIndex
+       Value (v1): Attestation 
+   - attestationDataRootsBucket 
+       Key   (k2): targetEpoc + validatorIndex
+       Value (k1): att.SigningRoot + []ValidatorIndex
+ 
+2) SaveAttestationRecordsForValidators
+   - Args : List of AttestationRecord ([]*slashertypes.IndexedAttestationWrapper)
+   - For every Attestation
+       * add one row in attestationRecordsBucket (k1, v1)
+       - For every ValidatorIndex in that Attestation
+         * add one row in attestationDataRootsBucket (k2,k1)
+
+3) AttestationRecordForValidator
+   - Args: TargetEpoc, ValidatorIdx
+   - Construct k2 :=  TargetEpoc + validatorIdx
+   - Pick k1 (as value) from attestationRecordsBucket
+   - Use k1 to get v1(Attestation) from attestationDataRootsBucket
+    
+4) HighestAttestations
+   - Args: List of ValidatorIndex ([]types.ValidatorIndex)
+   - Construct suffux []ValidatorIndex (suffix of k1)
+   - Pick the value (k1) of the last suffix from attestationDataRootsBucket   ???? it should be attestationRecordsBucket
+   - Use k1 to get v1 and construct HighestAttestation and return it
+
+5) CheckAttesterDoubleVotes (the actual problem)
+   - Args: List of Attstations ([]*slashertypes.IndexedAttestationWrapper)
+   - For every Attestation
+      - For every ValidatorIndex in the Attestation
+        * Construct k2 and get k1
+        * Use k1 to get v1 (Attestation)
+        * If v1 existed, then this attestation is a double attestation
+        * construct a AttesterDoubleVote record return it
+
+6) PruneAttestations
+   - For every row of attestationDataRootsBucket
+     * Delete k1, k2 attestationDataRootsBucket
+     * Delete k1, v1 from attestationDataRootsBucket
+    until a prune limit is reached.
+
+Issue:
+
+The issue was in step 5. For every validatorIndex of every attestation, there is a 
+a double get from the DB to check if the double vote existed or not. This caused
+CPU spike.
+
+
+New Logic:  
+
+The fix was to get rid of attestationRecordsBucket indirection and use only
+attestationDataRootsBucket with changed schema. 
+
+1) DB Schema is now changed to
+   - attestationDataRootsBucket
+      Key   (k1): targetEpoc + validatorIndex
+      Value (v1): att.SigningRoot + Attestation
+
+2) SaveAttestationRecordsForValidators
+   - Args : List of AttestationRecord ([]*slashertypes.IndexedAttestationWrapper)
+   - For every Attestation
+       - For every ValidatorIndex in that Attestation 
+           * add one row in attestationRecordsBucket (k1, v1)
+
+3) AttestationRecordForValidator
+   - Args: TargetEpoc, ValidatorIdx
+   - Construct k1 := TargetEpoc + validatorIdx
+   - Get v1(Attestation) from attestationDataRootsBucket
+
+4) HighestAttestations
+   - Args: List of ValidatorIndex ([]types.ValidatorIndex)
+   - Construct suffux []ValidatorIndex (suffix of k1)  ???? which is wrong, there is not validator list stored
+   - Pick the value (v1) of the last suffix from attestationDataRootsBucket
+
+5) CheckAttesterDoubleVotes (the actual problem)
+   - Args: List of Attstations ([]*slashertypes.IndexedAttestationWrapper)
+   - For every Attestation
+      - For every ValidatorIndex in the Attestation
+        * Construct k1 (epoc + valdator index)
+        * If v1 existed, then this attestation is a double attestation
+        * construct a AttesterDoubleVote record return it
+
+6) PruneAttestations
+   - For every row of attestationDataRootsBucket
+     * Delete k1, v1 from attestationDataRootsBucket
+    until a prune limit is reached.
+      
+
+-----
+The issue with this fix is in old code, we store an attestation only once.
+I this fix, we will have to store, one attestattion multiple times (no of validators for that attestation) 
+
+100 attestations per block, 100 validators per attestation
+k1 = SigningRoot(32) + ValidatorIndex(5)) = 13 bytes
+v1 = size_of(att)= 950 bytes
+keys total bytes = 4096 * 32 * (100 * 13) = 162 Mb
+values total bytes = 4096 * 32 * (100 * 950) = 11 Gb
+
+K2 = targetEpoc(32) + ValidatorIndexes(5 * 100 validators) = 532 bytes
+k1 = 13 bytes
+keys total bytes = 4096 * 32 * (100 * 532) = 6Gb
+values total bytes = 4096 * 32 * (100 * 13) = 162 Mb
+
+
+@rauljordan#2913 Yes, you were right about #9085.
+There are two thing about this.
+1) Previously, we were storing an attestation only once and having many indirections.
+    To bring down CPU usage, #8927 de-normalized the schema and stored every attestation multiple times (once for every validator who attested).
+    Now i see that we are using more space :-)
+    To bring down storage space **and** bring down the CPU usage, we can stagger DB access inside ```CheckAttesterDoubleVotes``` and make it give back the result 
+     asynchronously.
+2) I found out during a review today that the ```HighestAttestations``` in the old code may be not right.
